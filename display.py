@@ -5,7 +5,7 @@ import threading
 import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.animation as animation
-from fastestrplidar import FastestRplidar
+from RoadQuality.sensors.lidar_sensor import LidarSensor
 import smbus2
 from collections import deque
 import logging
