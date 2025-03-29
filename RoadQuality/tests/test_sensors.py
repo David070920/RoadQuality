@@ -46,9 +46,10 @@ class TestAccelerometer(unittest.TestCase):
 
     def test_get_acceleration(self):
         self.accelerometer.initialize()
-        accel_data = self.accelerometer.get_acceleration()
-        self.assertIsInstance(accel_data, tuple)
-        self.assertEqual(len(accel_data), 3)
+        accel_x, accel_y, accel_z = self.accelerometer.get_acceleration()
+        self.assertIsNotNone(accel_x)
+        self.assertIsNotNone(accel_y)
+        self.assertIsNotNone(accel_z)
 
     def test_reset(self):
         self.accelerometer.initialize()

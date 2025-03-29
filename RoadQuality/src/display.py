@@ -114,6 +114,8 @@ class Display:
                 thread.join()
             self.lidar.stop()
             self.gps.close()
+            if hasattr(self, 'i2c_bus') and self.i2c_bus:
+                self.i2c_bus.close()  # Close the I2C bus
             logger.info("All sensors and threads stopped successfully.")
         except Exception as e:
             logger.error(f"Error stopping sensors and threads: {e}")
