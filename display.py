@@ -1761,3 +1761,485 @@ class SensorFusion:
         logger.error(f"Error exporting trip data: {e}")
         export_results["error"] = str(e)
         return export_results
+        
+def update_quality_plot(self, frame):
+    """Update function for road quality visualization"""
+    with self.road_quality_lock:
+        # Update quality score history plot
+        if self.road_quality_history:
+            quality_data = np.array(self.road_quality_history)
+            x_data = np.arange(len(quality_data))
+            self.quality_line.set_data(x_data, quality_data)
+            
+            # Adjust x-axis limits for scrolling effect
+            self.ax_quality.set_xlim(max(0, len(quality_data) - 50), max(50, len(quality_data)))
+            
+            # Update quality score text
+            current_quality = self.road_quality["quality"]
+            current_score = self.road_quality["quality_score"]
+            self.quality_text.set_text(f"Current Quality: {current_quality} ({current_score}/100)")
+            
+            # Set color based on quality
+            if current_score >= 80:
+                color = 'green'
+            elif current_score >= 60:
+                color = 'lightgreen'
+            elif current_score >= 40:
+                color = 'gold'
+            elif current_score >= 20:
+                color = 'orange'
+            else:
+                color = 'red'
+            
+            self.quality_text.set_color(color)
+        
+        # Update road profile visualization
+        if self.road_profile_history:
+            # Get the latest profile data
+            latest_profile = self.road_profile_history[-1]
+            
+            # Create a 2D representation for the heatmap
+            profile_data = np.zeros((10, len(latest_profile)))
+            for i in range(10):  # Create 10 rows with the same data
+                profile_data[i, :] = latest_profile
+                
+            # Update the road profile image
+            self.road_profile.set_array(profile_data)
+            
+            # Update color limits for better contrast
+            vmax = max(5, np.max(profile_data))
+            vmin = min(-5, np.min(profile_data))
+            self.road_profile.set_clim(vmin, vmax)
+    
+    # Return all artists that were modified
+    return [self.quality_line, self.quality_text, self.road_profile]
+
+def setup_road_quality_visualization(self):
+    """Set up visualization specifically for road quality"""
+    # Create a figure for road quality metrics
+    self.fig_quality, (self.ax_quality, self.ax_profile) = plt.subplots(2, 1, figsize=(10, 8))
+    self.fig_quality.canvas.manager.set_window_title('Road Quality Metrics - SensorFusion')
+    
+    # Make figure minimizable
+    try:
+        plt.rcParams['figure.figsize'] = [10, 8]
+        
+        if hasattr(self.fig_quality.canvas.manager, 'window'):
+            backend = plt.get_backend().lower()
+            if 'qt' in backend:
+                self.fig_quality.canvas.manager.window.setWindowFlags(
+                    self.fig_quality.canvas.manager.window.windowFlags() & ~0x00000020
+                )
+            elif 'tk' in backend:
+                self.fig_quality.canvas.manager.window.wm_attributes("-topmost", 0)
+    except Exception as e:
+        logger.warning(f"Could not configure window manager for quality plot: {e}")
+    
+    # Top plot: Road quality score over time (0-100)
+    self.quality_line, = self.ax_quality.plot([], [], 'g-', linewidth=2)
+    self.ax_quality.set_ylim(0, 100)
+    self.ax_quality.set_xlim(0, 50)  # Start with showing 50 points
+    self.ax_quality.set_title("Road Quality Score")
+    self.ax_quality.set_ylabel("Quality (0-100)")
+    self.ax_quality.set_xlabel("Measurements")
+    self.ax_quality.grid(True)
+    
+    # Add horizontal regions for quality categories
+    self.ax_quality.axhspan(80, 100, alpha=0.2, color='green', label='Excellent')
+    self.ax_quality.axhspan(60, 80, alpha=0.2, color='lightgreen', label='Good')
+    self.ax_quality.axhspan(40, 60, alpha=0.2, color='gold', label='Fair')
+    self.ax_quality.axhspan(20, 40, alpha=0.2, color='orange', label='Poor')
+    self.ax_quality.axhspan(0, 20, alpha=0.2, color='red', label='Very Poor')
+    self.ax_quality.legend(loc='upper right')
+    
+    # Add a text element to show current quality score
+    self.quality_text = self.ax_quality.text(0.02, 0.92, "Quality: Unknown", 
+                                            transform=self.ax_quality.transAxes,
+                                            fontsize=12, fontweight='bold')
+    
+    # Bottom plot: Road profile from LiDAR
+    # Create custom colormap for road profile (red=depression, green=bump)
+    colors = [(0.8, 0, 0), (0.95, 0.95, 0.95), (0, 0.8, 0)]  # red, white, green
+    n_bins = 100
+    cmap_name = 'road_quality_cmap'
+    custom_cmap = LinearSegmentedColormap.from_list(cmap_name, colors, N=n_bins)
+    
+    # Create placeholder data
+    road_data = np.zeros((10, 100))
+    
+    # Create the heatmap for road profile
+    self.road_profile = self.ax_profile.imshow(
+        road_data,
+        aspect='auto',
+        cmap=custom_cmap,
+        interpolation='nearest',
+        origin='lower',
+        extent=[0, 100, 0, 10]
+    )
+    
+    # Add a colorbar
+    cbar = self.fig_quality.colorbar(self.road_profile, ax=self.ax_profile)
+    cbar.set_label('Surface Variation (mm)')
+    
+    self.ax_profile.set_title("Road Surface Profile")
+    self.ax_profile.set_xlabel("Distance (samples)")
+    self.ax_profile.set_ylabel("Width")
+    self.ax_profile.set_yticks([])  # Hide y-axis ticks since they don't represent anything
+    
+    # Add user info text
+    user_info = f"User: {self.config.USER_LOGIN} | Session: {self.config.SYSTEM_START_TIME}"
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    self.fig_quality.text(0.99, 0.01, f"{user_info} | Current time: {current_time}", 
+                          horizontalalignment='right',
+                          verticalalignment='bottom',
+                          transform=self.fig_quality.transFigure,
+                          fontsize=8, alpha=0.7)
+    
+    self.fig_quality.tight_layout()
+    
+    # Create animation
+    self.quality_ani = animation.FuncAnimation(
+        self.fig_quality,
+        self.update_quality_plot,
+        interval=self.config.UPDATE_INTERVAL * 2,  # Slightly slower update for this visualization
+        blit=True,
+        cache_frame_data=False
+    )
+    
+    logger.info("Road quality visualization setup complete")
+
+def calibrate_sensors(self):
+    """Perform sensor calibration routine at startup"""
+    logger.info("Starting sensor calibration...")
+    
+    # Step 1: Calibrate accelerometer to detect orientation
+    accel_samples = []
+    for _ in range(50):  # Collect 50 samples
+        accel_z = self.get_accel_data()
+        if accel_z is not None:
+            accel_samples.append(accel_z)
+        time.sleep(0.01)
+    
+    if accel_samples:
+        # Calculate baseline gravitational acceleration
+        self.accel_baseline = np.mean(accel_samples)
+        logger.info(f"Accelerometer baseline: {self.accel_baseline:.3f}g")
+        
+        # Detect orientation based on baseline
+        if 0.8 < self.accel_baseline < 1.2:
+            self.orientation = "horizontal"
+        elif -0.2 < self.accel_baseline < 0.2:
+            self.orientation = "vertical"
+        else:
+            self.orientation = "tilted"
+            
+        logger.info(f"Detected orientation: {self.orientation}")
+    else:
+        logger.warning("Could not calibrate accelerometer")
+        self.accel_baseline = 1.0
+        self.orientation = "unknown"
+    
+    # Step 2: Calibrate LiDAR distance to ground (stationary)
+    lidar_samples = []
+    logger.info("Calibrating LiDAR ground distance. Keep the bike stationary...")
+    
+    for _ in range(10):  # Collect 10 scans
+        try:
+            scan_data = self.lidar_device.get_scan_as_vectors(filter_quality=True)
+            filtered_data = self.filter_lidar_angles(scan_data)
+            
+            # Get the median distance for the points directly below
+            distances = [point[1] for point in filtered_data 
+                        if 355 <= (point[0] % 360) <= 360 or 0 <= (point[0] % 360) <= 5]
+            
+            if distances:
+                lidar_samples.append(np.median(distances))
+            time.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Error during LiDAR calibration: {e}")
+    
+    if lidar_samples:
+        # Set the ground distance baseline
+        self.ground_distance_baseline = np.median(lidar_samples)
+        logger.info(f"Ground distance baseline: {self.ground_distance_baseline:.2f}mm")
+    else:
+        logger.warning("Could not calibrate LiDAR ground distance")
+        self.ground_distance_baseline = 300.0  # Default 30cm assumption
+    
+    # Store calibration data
+    self.calibration_data = {
+        "timestamp": datetime.now().isoformat(),
+        "accel_baseline": float(self.accel_baseline),
+        "ground_distance": float(self.ground_distance_baseline),
+        "orientation": self.orientation
+    }
+    
+    logger.info("Sensor calibration completed")
+    return True
+
+def detect_road_anomalies(self, lidar_data):
+    """Detect specific road anomalies like potholes and bumps"""
+    # Extract perpendicular distance measurements (ground points)
+    ground_points = []
+    for point in lidar_data:
+        angle, distance = point
+        angle_norm = angle % 360
+        # Consider only points aimed close to perpendicular to ground
+        if 355 <= angle_norm <= 359 or 0 <= angle_norm <= 5:
+            ground_points.append(distance)
+    
+    if len(ground_points) < 5:
+        return {"anomalies": [], "has_anomaly": False}
+    
+    # Calculate baseline (median distance)
+    ground_points = np.array(ground_points)
+    median_baseline = np.median(ground_points)
+    
+    # Define thresholds for anomalies (in mm)
+    POTHOLE_THRESHOLD = 30    # 3cm deeper than surroundings
+    BUMP_THRESHOLD = 20       # 2cm higher than surroundings
+    CRACK_THRESHOLD = 15      # 1.5cm variation
+    
+    # Detect anomalies
+    anomalies = []
+    
+    # Look for potholes (significantly farther distance)
+    pothole_indices = np.where(ground_points - median_baseline > POTHOLE_THRESHOLD)[0]
+    if len(pothole_indices) > 0:
+        depth = np.max(ground_points[pothole_indices] - median_baseline)
+        width = len(pothole_indices) * 2  # Approximate width in cm
+        anomalies.append({
+            "type": "pothole",
+            "depth_mm": float(depth),
+            "width_cm": width,
+            "severity": "high" if depth > 50 else "medium"
+        })
+    
+    # Look for bumps (significantly closer distance)
+    bump_indices = np.where(median_baseline - ground_points > BUMP_THRESHOLD)[0]
+    if len(bump_indices) > 0:
+        height = np.max(median_baseline - ground_points[bump_indices])
+        width = len(bump_indices) * 2  # Approximate width in cm
+        anomalies.append({
+            "type": "bump",
+            "height_mm": float(height),
+            "width_cm": width,
+            "severity": "high" if height > 30 else "medium"
+        })
+    
+    # Look for cracks (rapid variations)
+    if len(ground_points) > 3:
+        diffs = np.abs(np.diff(ground_points))
+        crack_indices = np.where(diffs > CRACK_THRESHOLD)[0]
+        if len(crack_indices) > 0:
+            anomalies.append({
+                "type": "crack",
+                "width_mm": float(np.max(diffs[crack_indices])),
+                "severity": "medium"
+            })
+    
+    # Return all detected anomalies
+    return {
+        "anomalies": anomalies,
+        "has_anomaly": len(anomalies) > 0,
+        "baseline_mm": float(median_baseline)
+    }
+
+def process_road_data(self):
+    """Process LiDAR and accelerometer data for road quality analysis"""
+    # Get current LiDAR data with lock
+    with self.lidar_data_lock:
+        lidar_data = self.lidar_data.copy() if self.lidar_data else []
+    
+    # Get current accelerometer data with lock
+    with self.accel_data_lock:
+        accel_data = list(self.accel_data) if self.accel_data else []
+    
+    # Apply motion compensation
+    compensated_data = self.apply_motion_compensation(lidar_data, accel_data)
+    
+    # Measure road quality
+    road_quality = self.measure_road_quality(compensated_data)
+    
+    # Detect road anomalies
+    anomalies = self.detect_road_anomalies(compensated_data)
+    
+    # Get current GPS position
+    with self.gps_data_lock:
+        gps_data = self.gps_data.copy()
+    
+    # Combine all data into a comprehensive road analysis
+    analysis = {
+        "timestamp": datetime.now().isoformat(),
+        "gps": {
+            "lat": gps_data.get("lat", 0),
+            "lon": gps_data.get("lon", 0),
+            "alt": gps_data.get("alt", 0)
+        },
+        "quality": road_quality,
+        "anomalies": anomalies,
+        "trip_id": self.trip_id
+    }
+    
+    # Store analysis to memory for visualization
+    with self.road_quality_lock:
+        self.road_quality = road_quality
+        self.road_anomalies = anomalies
+    
+    # Record data if recording is enabled
+    if self.is_recording:
+        self.record_data_point(analysis)
+    
+    # Check if we need to alert the user about hazards
+    if anomalies.get("has_anomaly", False):
+        self.alert_user_about_hazards(anomalies)
+    
+    return analysis
+
+def apply_motion_compensation(self, lidar_data, accel_data):
+    """Apply motion compensation to LiDAR readings based on accelerometer data"""
+    # Skip if no accelerometer data is available
+    if not accel_data or not hasattr(self, 'accel_baseline'):
+        return lidar_data
+    
+    # Calculate vertical displacement from accelerometer
+    current_accel = accel_data[-1] - self.accel_baseline  # Remove gravity component
+    time_delta = 0.1  # Approximate time between samples (100ms)
+    
+    # Convert acceleration to m/s² (from g)
+    accel_ms2 = current_accel * 9.81
+    
+    # Calculate displacement in mm
+    displacement_mm = 0.5 * accel_ms2 * (time_delta ** 2) * 1000
+    
+    # Apply displacement compensation to each LiDAR reading
+    compensated_data = []
+    for point in lidar_data:
+        angle, distance = point
+        
+        # Only compensate points that are measuring the ground
+        angle_normalized = angle % 360
+        if 0 <= angle_normalized <= 10 or 350 <= angle_normalized <= 359:
+            # Adjust distance by calculated displacement
+            adjusted_distance = distance - displacement_mm
+            compensated_data.append((angle, adjusted_distance))
+        else:
+            # Keep other angles unchanged
+            compensated_data.append(point)
+    
+    return compensated_data
+
+def alert_user_about_hazards(self, anomalies):
+    """Alert the user about detected road hazards"""
+    if not anomalies or not anomalies.get("anomalies"):
+        return
+    
+    # Log the alert
+    anomaly_types = [a.get("type", "unknown") for a in anomalies.get("anomalies", [])]
+    logger.warning(f"ROAD HAZARD DETECTED: {', '.join(anomaly_types)}")
+    
+    # In a real system, you could trigger visual or audio warnings here
+    # For example:
+    # - Flash an LED
+    # - Play a warning sound
+    # - Send a push notification
+    
+    # For our visualization, we'll update the road quality plot with an alert
+    # (This is handled in the update_quality_plot method)
+    pass
+
+def road_quality_thread_func(self):
+    """Thread function for continuous road quality analysis"""
+    logger.info("Road quality analysis thread started")
+    
+    while not self.stop_event.is_set():
+        try:
+            # Process current data to calculate road quality
+            analysis = self.process_road_data()
+            
+            # Save data periodically
+            current_time = time.time()
+            if hasattr(self, 'last_save_time') and (current_time - self.last_save_time > self.config.SAVE_INTERVAL):
+                self.save_data()
+                self.last_save_time = current_time
+            
+        except Exception as e:
+            logger.error(f"Error in road quality thread: {e}")
+        
+        # Sleep to prevent high CPU usage
+        time.sleep(0.5)
+    
+    logger.info("Road quality analysis thread stopped")
+
+def run(self):
+    """Main function to run the application"""
+    # Set up signal handler for graceful shutdown
+    signal.signal(signal.SIGINT, self.signal_handler)
+    
+    # Initialize I2C
+    if not self.initialize_i2c():
+        logger.error("Failed to initialize I2C. Exiting.")
+        return
+    
+    # Initialize sensors
+    sensors_ok = True
+    
+    if not self.initialize_lidar():
+        logger.error("Failed to initialize LiDAR. Exiting.")
+        sensors_ok = False
+        
+    if not self.initialize_gps():
+        logger.warning("Failed to initialize GPS. Continuing without GPS.")
+        
+    if not self.initialize_icm20948():
+        logger.warning("Failed to initialize ICM20948. Continuing without accelerometer data.")
+    
+    if not sensors_ok:
+        logger.error("Critical sensors failed to initialize. Exiting.")
+        self.cleanup()
+        return
+    
+    # Set up data recording
+    self.setup_recording()
+    
+    # Calibrate sensors
+    self.calibrate_sensors()
+    
+    # Start data collection threads
+    self.threads = [
+        threading.Thread(target=self.lidar_thread_func, daemon=True),
+        threading.Thread(target=self.gps_thread_func, daemon=True),
+        threading.Thread(target=self.accel_thread_func, daemon=True),
+        threading.Thread(target=self.road_quality_thread_func, daemon=True)
+    ]
+    
+    for thread in self.threads:
+        thread.start()
+    
+    # Initialize recording state
+    self.is_recording = True
+    self.last_save_time = time.time()
+    
+    # Set up and start visualization
+    try:
+        logger.info("Setting up visualization...")
+        self.setup_visualization()
+        self.setup_road_quality_visualization()
+        
+        # Use plt.ioff() to avoid keeping windows always on top
+        plt.ioff()
+        # Show the figures but don't block
+        plt.show(block=False)
+        
+        # Keep the main thread alive but responsive to signals
+        while not self.stop_event.is_set():
+            plt.pause(0.1)  # Update plots while allowing other operations
+            
+    except Exception as e:
+        logger.error(f"Error in visualization: {e}")
+    finally:
+        # Make sure to save any unsaved data before exiting
+        if hasattr(self, 'is_recording') and self.is_recording:
+            self.save_data()
+            
+        self.cleanup()
