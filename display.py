@@ -2172,74 +2172,69 @@ def road_quality_thread_func(self):
     logger.info("Road quality analysis thread stopped")
 
 def run(self):
-    """Main function to run the application"""
-    # Set up signal handler for graceful shutdown
-    signal.signal(signal.SIGINT, self.signal_handler)
-    
-    # Initialize I2C
-    if not self.initialize_i2c():
-        logger.error("Failed to initialize I2C. Exiting.")
-        return
-    
-    # Initialize sensors
-    sensors_ok = True
-    
-    if not self.initialize_lidar():
-        logger.error("Failed to initialize LiDAR. Exiting.")
-        sensors_ok = False
-        
-    if not self.initialize_gps():
-        logger.warning("Failed to initialize GPS. Continuing without GPS.")
-        
-    if not self.initialize_icm20948():
-        logger.warning("Failed to initialize ICM20948. Continuing without accelerometer data.")
-    
-    if not sensors_ok:
-        logger.error("Critical sensors failed to initialize. Exiting.")
-        self.cleanup()
-        return
-    
-    # Set up data recording
-    self.setup_recording()
-    
-    # Calibrate sensors
-    self.calibrate_sensors()
-    
-    # Start data collection threads
-    self.threads = [
-        threading.Thread(target=self.lidar_thread_func, daemon=True),
-        threading.Thread(target=self.gps_thread_func, daemon=True),
-        threading.Thread(target=self.accel_thread_func, daemon=True),
-        threading.Thread(target=self.road_quality_thread_func, daemon=True)
-    ]
-    
-    for thread in self.threads:
-        thread.start()
-    
-    # Initialize recording state
-    self.is_recording = True
-    self.last_save_time = time.time()
-    
-    # Set up and start visualization
+    """
+    Main entry point to start all sensor threads, visualization, and processing loops.
+    """
     try:
-        logger.info("Setting up visualization...")
-        self.setup_visualization()
+        logger.info("Starting SensorFusion run sequence...")
+
+        # Initialize sensors
+        self.initialize_lidar()
+        self.initialize_gps()
+        self.initialize_icm20948()
+        self.calibrate_sensors()
+        self.setup_recording()
+        self.setup_battery_monitoring()
         self.setup_road_quality_visualization()
+        self.setup_visualization()
+
+        # Create and start threads for each sensor/process
+        lidar_thread = Thread(target=self.lidar_thread_func, daemon=True)
+        gps_thread = Thread(target=self.gps_thread_func, daemon=True)
+        accel_thread = Thread(target=self.accel_thread_func, daemon=True)
+        quality_thread = Thread(target=self.road_quality_thread_func, daemon=True)
+        battery_thread = Thread(target=self.battery_monitoring_thread, daemon=True)
+
+        lidar_thread.start()
+        gps_thread.start()
+        accel_thread.start()
+        quality_thread.start()
+        battery_thread.start()
+
+        logger.info("All threads successfully started.")
+
+        # Launch Matplotlib animation or any main event loop
+        self.ani_lidar = FuncAnimation(
+            self.lidar_fig, self.update_lidar_plot, fargs=(self.lidar_line,), interval=self.Config.UPDATE_INTERVAL
+        )
+        self.ani_accel = FuncAnimation(
+            self.accel_fig, self.update_accel_plot, fargs=(self.accel_line,), interval=self.Config.UPDATE_INTERVAL
+        )
+        self.ani_quality = FuncAnimation(
+            self.quality_fig, self.update_quality_plot, interval=self.Config.UPDATE_INTERVAL
+        )
         
-        # Use plt.ioff() to avoid keeping windows always on top
-        plt.ioff()
-        # Show the figures but don't block
-        plt.show(block=False)
-        
-        # Keep the main thread alive but responsive to signals
-        while not self.stop_event.is_set():
-            plt.pause(0.1)  # Update plots while allowing other operations
-            
+        plt.show()  # Blocking call until visualization window is closed
+
+        # Once the plot window is closed, stop threads gracefully
+        logger.info("Stopping SensorFusion threads...")
+        self.stop_event.set()
+
+        lidar_thread.join()
+        gps_thread.join()
+        accel_thread.join()
+        quality_thread.join()
+        battery_thread.join()
+
+        logger.info("All threads terminated. Performing final data save...")
+        self.save_data()
+        logger.info("SensorFusion run sequence completed.")
+
+    except KeyboardInterrupt:
+        logger.warning("KeyboardInterrupt received; cleaning up...")
+        self.stop_event.set()
+        self.save_data()
     except Exception as e:
-        logger.error(f"Error in visualization: {e}")
-    finally:
-        # Make sure to save any unsaved data before exiting
-        if hasattr(self, 'is_recording') and self.is_recording:
-            self.save_data()
-            
-        self.cleanup()
+        logger.error(f"An error occurred in run: {e}", exc_info=True)
+        self.stop_event.set()
+        self.save_data()
